@@ -3,7 +3,7 @@ A Discord bot for managing events. Uses [Serenity](https://github.com/serenity-r
 and [Disel](http://diesel.rs/) as an ORM.
 
 ## Running
-`./hype_bot -c config.toml`
+`./hype_bot config.toml`
 
 ##Config
 ```toml
