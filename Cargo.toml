@@ -1,0 +1,20 @@
+[package]
+name = "hype_bot"
+version = "0.1.0"
+authors = ["Joey Hines <joey@ahines.net>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = "2.33.0"
+serde = "1.0.106"
+serde_derive = "1.0.104"
+config = "0.9"
+chrono = "0.4.11"
+diesel = { version = "1.4.0", features = ["mysql", "chrono"] }
+diesel_migrations = "1.4.0"
+
+[dependencies.serenity]
+version = "0.8.4"
+features = ["framework", "standard_framework"]
