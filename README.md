@@ -19,4 +19,6 @@ prefix = "~"
 event_channel = 0
 # Permissions to use the bot
 event_roles = 0
+# Timezone to display events
+event_timezone = "America/New_York"
 ```

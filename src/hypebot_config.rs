@@ -8,7 +8,8 @@ pub struct HypeBotConfig {
     pub discord_key: String,
     pub prefix: String,
     pub event_channel: u64,
-    pub event_roles: Vec<String>,
+    pub event_roles: Vec<u64>,
+    pub event_timezone: String,
 }
 
 impl HypeBotConfig {
