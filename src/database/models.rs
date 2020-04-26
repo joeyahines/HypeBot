@@ -9,6 +9,7 @@ pub struct Event {
     pub event_time: NaiveDateTime,
     pub message_id: String,
     pub thumbnail_link: String,
+    pub reminder_sent: i32,
 }
 
 #[derive(Insertable)]
@@ -19,4 +20,5 @@ pub struct NewEvent {
     pub event_time: NaiveDateTime,
     pub message_id: String,
     pub thumbnail_link: String,
+    pub reminder_sent: i32,
 }

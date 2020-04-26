@@ -6,5 +6,6 @@ table! {
         event_time -> Datetime,
         message_id -> Varchar,
         thumbnail_link -> Varchar,
+        reminder_sent -> Integer,
     }
 }

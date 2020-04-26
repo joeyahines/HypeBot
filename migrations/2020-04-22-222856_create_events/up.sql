@@ -5,5 +5,6 @@ CREATE TABLE events (
   event_desc VARCHAR(255) NOT NULL,
   event_time DATETIME NOT NULL,
   message_id VARCHAR(255) NOT NULL,
-  thumbnail_link VARCHAR(255) NOT NULL
+  thumbnail_link VARCHAR(255) NOT NULL,
+  reminder_sent INTEGER NOT NULL
 )
