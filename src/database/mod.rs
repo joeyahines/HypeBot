@@ -13,17 +13,26 @@ pub fn establish_connection(database_url: String) -> MysqlConnection {
         .expect(&format!("Error connecting to {}", database_url))
 }
 /// Insert an event into the database
-pub fn insert_event(databse_url: String, new_event: &NewEvent) -> Event {
+pub fn insert_event(database_url: String, new_event: &NewEvent) -> Result<Event, Error> {
     use schema::events::dsl::{events, id};
 
-    let connection = establish_connection(databse_url);
+    let connection = establish_connection(database_url);
 
     diesel::insert_into(events)
         .values(new_event)
         .execute(&connection)
         .expect("Error saving event");
 
-    events.order(id).first(&connection).unwrap()
+    events.order(id).first(&connection)
+}
+
+/// Remove event
+pub fn remove_event(database_url: String, event_id: i32) -> Result<usize, Error> {
+    use schema::events::dsl::{events, id};
+
+    let connection = establish_connection(database_url);
+
+    diesel::delete(events.filter(id.eq(event_id))).execute(&connection)
 }
 
 /// Get an event by name

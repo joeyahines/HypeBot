@@ -11,7 +11,7 @@ use serenity::client::Client;
 use serenity::framework::standard::macros::{command, group};
 use serenity::framework::standard::Args;
 use serenity::framework::standard::{CommandError, CommandResult, StandardFramework};
-use serenity::http::{Http};
+use serenity::http::Http;
 use serenity::model::channel::{Message, Reaction};
 use serenity::model::prelude::{ChannelId, Ready};
 use serenity::prelude::TypeMapKey;
@@ -58,14 +58,22 @@ impl EventHandler for Handler {
     /// On reaction add
     fn reaction_add(&self, ctx: Context, reaction: Reaction) {
         if reaction.emoji.as_data() == INTERESTED_EMOJI {
-            send_message_to_reaction_users(&ctx, &reaction, "Hello, you are now receiving reminders for");
+            send_message_to_reaction_users(
+                &ctx,
+                &reaction,
+                "Hello, you are now receiving reminders for",
+            );
         }
     }
 
     /// On reaction remove
     fn reaction_remove(&self, ctx: Context, reaction: Reaction) {
         if reaction.emoji.as_data() == INTERESTED_EMOJI {
-            send_message_to_reaction_users(&ctx, &reaction, "Hello, you are no longer receiving reminders for");
+            send_message_to_reaction_users(
+                &ctx,
+                &reaction,
+                "Hello, you are no longer receiving reminders for",
+            );
         }
     }
 
@@ -74,7 +82,6 @@ impl EventHandler for Handler {
         println!("Connected as {}", ready.user.name);
     }
 }
-
 
 /// Thread to send reminders to users
 fn send_reminders(cache_and_http: &Arc<CacheAndHttp>, data: &Arc<RwLock<ShareMap>>) {
@@ -88,21 +95,23 @@ fn send_reminders(cache_and_http: &Arc<CacheAndHttp>, data: &Arc<RwLock<ShareMap
         // Get all current events
         if let Ok(events) = get_all_events(config.db_url.clone()) {
             for event in events {
-                // Get time to event
-                let utc_time = DateTime::<Utc>::from_utc(event.event_time.clone(), Utc);
-                let time_to_event = (utc_time - chrono::offset::Utc::now()).num_minutes();
-                // If the event starts in less than 10 minutes
-                if time_to_event <= 10 && time_to_event > 0 && event.reminder_sent == 1 {
-                    // Get message isd
-                    if let Ok(message_id) = event.message_id.parse::<u64>() {
+                if let Ok(message_id) = event.message_id.parse::<u64>() {
+                    // Get time to event
+                    let utc_time = DateTime::<Utc>::from_utc(event.event_time.clone(), Utc);
+                    let time_to_event = (utc_time - chrono::offset::Utc::now()).num_minutes();
+                    // If the event starts in less than 10 minutes
+                    if time_to_event <= 10 && time_to_event > 0 && event.reminder_sent == 1 {
+                        // Get message isd
                         if let Ok(message) = http.get_message(event_channel_id, message_id) {
                             let reaction_users = message
                                 .reaction_users(&http, INTERESTED_EMOJI, None, None)
                                 .unwrap_or(Vec::<User>::new());
 
                             // Build reminder message
-                            let msg: String = format!("Hello! **{}** begins in **{} minutes**!",
-                                                      &event.event_name, time_to_event);
+                            let msg: String = format!(
+                                "Hello! **{}** begins in **{} minutes**!",
+                                &event.event_name, time_to_event
+                            );
 
                             // Send reminder to each reacted user
                             for user in reaction_users {
@@ -110,8 +119,10 @@ fn send_reminders(cache_and_http: &Arc<CacheAndHttp>, data: &Arc<RwLock<ShareMap
                             }
                         }
 
-                        set_reminder(config.db_url.clone(), event.id, 1)
-                            .ok();
+                        set_reminder(config.db_url.clone(), event.id, 1).ok();
+                    } else if time_to_event < -60 {
+                        remove_event(config.db_url.clone(), event.id).ok();
+                        http.delete_message(event_channel_id, message_id).ok();
                     }
                 }
             }
@@ -149,7 +160,7 @@ fn send_message_to_reaction_users(ctx: &Context, reaction: &Reaction, msg_text: 
 /// Send a DM message to a user
 fn send_dm_message(http: &Http, user: User, message: &String) {
     if let Ok(dm_channel) = user.create_dm_channel(&http) {
-        dm_channel.send_message(&http, |m| { m.content(message) }).ok();
+        dm_channel.send_message(&http, |m| m.content(message)).ok();
     }
 }
 
@@ -270,7 +281,7 @@ fn confirm_event(ctx: &mut Context, msg: &Message, _args: Args) -> CommandResult
                 reminder_sent: 0,
             };
 
-            insert_event(config.db_url.clone(), &new_event);
+            insert_event(config.db_url.clone(), &new_event).ok();
         } else {
             msg.reply(&ctx, format!("You do not have a pending event!"))?;
         }
@@ -419,4 +430,3 @@ fn main() -> clap::Result<()> {
 
     Ok(())
 }
-
