@@ -11,7 +11,7 @@ use serenity::client::Client;
 use serenity::framework::standard::macros::{command, group};
 use serenity::framework::standard::Args;
 use serenity::framework::standard::{CommandError, CommandResult, StandardFramework};
-use serenity::http::Http;
+use serenity::http::{Http};
 use serenity::model::channel::{Message, Reaction};
 use serenity::model::prelude::{ChannelId, Ready};
 use serenity::prelude::TypeMapKey;
@@ -41,46 +41,6 @@ const UNINTERESTED_EMOJI: &str = "\u{274C}";
 #[commands(create_event, confirm_event)]
 struct EventCommands;
 
-/// Handler for Discord events
-struct Handler;
-
-impl EventHandler for Handler {
-    /// On reaction
-    fn reaction_add(&self, ctx: Context, reaction: Reaction) {
-        if reaction.emoji.as_data() == INTERESTED_EMOJI {
-            if let Ok(config) = get_config(&ctx.data) {
-                let db_link = config.db_url.clone();
-                let message_id = reaction.message_id.0.to_string();
-
-                let event = match get_event_by_msg_id(db_link, message_id) {
-                    Ok(event) => event,
-                    Err(_) => {
-                        return;
-                    }
-                };
-
-                if let Ok(user) = ctx.http.get_user(reaction.user_id.0) {
-                    if let Ok(dm_channel) = user.create_dm_channel(&ctx.http) {
-                        dm_channel
-                            .send_message(&ctx.http, |m| {
-                                m.content(format!(
-                                    "You have signed up to receive reminders for **{}**!",
-                                    &event.event_name
-                                ))
-                            })
-                            .ok();
-                    }
-                }
-            }
-        }
-    }
-
-    /// On bot ready
-    fn ready(&self, _: Context, ready: Ready) {
-        println!("Connected as {}", ready.user.name);
-    }
-}
-
 /// Struct for storing drafted events
 struct DraftEvent {
     pub event: NewEvent,
@@ -91,85 +51,30 @@ impl TypeMapKey for DraftEvent {
     type Value = DraftEvent;
 }
 
-embed_migrations!("migrations/");
-fn main() -> clap::Result<()> {
-    // Initialize arg parser
-    let mut app = App::new("Hype Bot")
-        .about("Hype Bot: Hype Up Your Discord Events!")
-        .arg(
-            Arg::with_name("config")
-                .index(1)
-                .short("c")
-                .long("config")
-                .value_name("CONFIG_PATH")
-                .help("Config file path"),
-        );
+/// Handler for Discord events
+struct Handler;
 
-    // Get arg parser
-    let matches = app.clone().get_matches();
-
-    // Check if config is set
-    if let Some(config_path) = matches.value_of("config") {
-        // Load config
-        let cfg = match hypebot_config::HypeBotConfig::new(config_path) {
-            Ok(cfg) => cfg,
-            Err(err) => {
-                println!("Error opening config file: {}", err);
-                exit(-1);
-            }
-        };
-
-        // Run migrations
-        let connection = establish_connection(cfg.db_url.clone());
-        embedded_migrations::run(&connection).expect("Unable to run migrations");
-
-        // New client
-        let mut client =
-            Client::new(cfg.discord_key.clone(), Handler).expect("Error creating client");
-
-        // Configure client
-        client.with_framework(
-            StandardFramework::new()
-                .configure(|c| {
-                    c.prefix(cfg.prefix.as_str().clone())
-                        .allow_dm(false)
-                        .ignore_bots(true)
-                })
-                .group(&EVENTCOMMANDS_GROUP),
-        );
-
-        // Copy config data to client data
-        {
-            let mut data = client.data.write();
-            data.insert::<HypeBotConfig>(cfg);
-            data.insert::<DraftEvent>(DraftEvent {
-                event: NewEvent {
-                    message_id: String::new(),
-                    event_time: Utc::now().naive_utc(),
-                    event_name: String::new(),
-                    event_desc: String::new(),
-                    thumbnail_link: String::new(),
-                    reminder_sent: 0 as i32,
-                },
-                creator_id: 0,
-            });
+impl EventHandler for Handler {
+    /// On reaction add
+    fn reaction_add(&self, ctx: Context, reaction: Reaction) {
+        if reaction.emoji.as_data() == INTERESTED_EMOJI {
+            send_message_to_reaction_users(&ctx, &reaction, "Hello, you are now receiving reminders for");
         }
-        let data = client.data.clone();
-        let cache_and_http = client.cache_and_http.clone();
-        thread::spawn(move || send_reminders(&cache_and_http, &data));
-
-        // Start bot
-        println!("Starting Hypebot!");
-        if let Err(why) = client.start() {
-            println!("An error occurred while running the client: {:?}", why);
-        }
-    } else {
-        // Print help
-        app.print_help()?;
     }
 
-    Ok(())
+    /// On reaction remove
+    fn reaction_remove(&self, ctx: Context, reaction: Reaction) {
+        if reaction.emoji.as_data() == INTERESTED_EMOJI {
+            send_message_to_reaction_users(&ctx, &reaction, "Hello, you are no longer receiving reminders for");
+        }
+    }
+
+    /// On bot ready
+    fn ready(&self, _: Context, ready: Ready) {
+        println!("Connected as {}", ready.user.name);
+    }
 }
+
 
 /// Thread to send reminders to users
 fn send_reminders(cache_and_http: &Arc<CacheAndHttp>, data: &Arc<RwLock<ShareMap>>) {
@@ -195,26 +100,56 @@ fn send_reminders(cache_and_http: &Arc<CacheAndHttp>, data: &Arc<RwLock<ShareMap
                                 .reaction_users(&http, INTERESTED_EMOJI, None, None)
                                 .unwrap_or(Vec::<User>::new());
 
+                            // Build reminder message
+                            let msg: String = format!("Hello! **{}** begins in **{} minutes**!",
+                                                      &event.event_name, time_to_event);
+
                             // Send reminder to each reacted user
                             for user in reaction_users {
-                                if let Ok(dm_channel) = user.create_dm_channel(&http) {
-                                    dm_channel
-                                        .send_message(&http, |m| {
-                                            m.content(format!(
-                                                "Hello! **{}** begins in **{} minutes**!",
-                                                &event.event_name, time_to_event
-                                            ))
-                                        })
-                                        .ok();
-                                }
+                                send_dm_message(&http, user, &msg);
                             }
                         }
 
-                        set_reminder(config.db_url.clone(), event.id, 1).ok();
+                        set_reminder(config.db_url.clone(), event.id, 1)
+                            .ok();
                     }
                 }
             }
         }
+    }
+}
+
+/// Send a message to a reaction user
+///
+/// Message will be sent in the format
+/// ```
+/// "{msg_text} **event_name**"
+/// ```
+fn send_message_to_reaction_users(ctx: &Context, reaction: &Reaction, msg_text: &str) {
+    if let Ok(config) = get_config(&ctx.data) {
+        let db_link = config.db_url.clone();
+        let message_id = reaction.message_id.0.to_string();
+
+        let event = match get_event_by_msg_id(db_link, message_id) {
+            Ok(event) => event,
+            Err(_) => {
+                return;
+            }
+        };
+
+        // Format message
+        let msg: String = format!("{} **{}**", msg_text, event.event_name);
+
+        if let Ok(user) = reaction.user(&ctx.http) {
+            send_dm_message(&ctx.http, user, &msg);
+        }
+    }
+}
+
+/// Send a DM message to a user
+fn send_dm_message(http: &Http, user: User, message: &String) {
+    if let Ok(dm_channel) = user.create_dm_channel(&http) {
+        dm_channel.send_message(&http, |m| { m.content(message) }).ok();
     }
 }
 
@@ -405,3 +340,83 @@ fn create_event(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResu
 
     Ok(())
 }
+embed_migrations!("migrations/");
+fn main() -> clap::Result<()> {
+    // Initialize arg parser
+    let mut app = App::new("Hype Bot")
+        .about("Hype Bot: Hype Up Your Discord Events!")
+        .arg(
+            Arg::with_name("config")
+                .index(1)
+                .short("c")
+                .long("config")
+                .value_name("CONFIG_PATH")
+                .help("Config file path"),
+        );
+
+    // Get arg parser
+    let matches = app.clone().get_matches();
+
+    // Check if config is set
+    if let Some(config_path) = matches.value_of("config") {
+        // Load config
+        let cfg = match hypebot_config::HypeBotConfig::new(config_path) {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                println!("Error opening config file: {}", err);
+                exit(-1);
+            }
+        };
+
+        // Run migrations
+        let connection = establish_connection(cfg.db_url.clone());
+        embedded_migrations::run(&connection).expect("Unable to run migrations");
+
+        // New client
+        let mut client =
+            Client::new(cfg.discord_key.clone(), Handler).expect("Error creating client");
+
+        // Configure client
+        client.with_framework(
+            StandardFramework::new()
+                .configure(|c| {
+                    c.prefix(cfg.prefix.as_str().clone())
+                        .allow_dm(false)
+                        .ignore_bots(true)
+                })
+                .group(&EVENTCOMMANDS_GROUP),
+        );
+
+        // Copy config data to client data
+        {
+            let mut data = client.data.write();
+            data.insert::<HypeBotConfig>(cfg);
+            data.insert::<DraftEvent>(DraftEvent {
+                event: NewEvent {
+                    message_id: String::new(),
+                    event_time: Utc::now().naive_utc(),
+                    event_name: String::new(),
+                    event_desc: String::new(),
+                    thumbnail_link: String::new(),
+                    reminder_sent: 0 as i32,
+                },
+                creator_id: 0,
+            });
+        }
+        let data = client.data.clone();
+        let cache_and_http = client.cache_and_http.clone();
+        thread::spawn(move || send_reminders(&cache_and_http, &data));
+
+        // Start bot
+        println!("Starting Hypebot!");
+        if let Err(why) = client.start() {
+            println!("An error occurred while running the client: {:?}", why);
+        }
+    } else {
+        // Print help
+        app.print_help()?;
+    }
+
+    Ok(())
+}
+
