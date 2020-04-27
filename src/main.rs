@@ -38,7 +38,7 @@ const UNINTERESTED_EMOJI: &str = "\u{274C}";
 
 /// Event commands group
 #[group]
-#[commands(create_event, confirm_event)]
+#[commands(create_event, confirm_event, cancel_event)]
 struct EventCommands;
 
 /// Struct for storing drafted events
@@ -255,7 +255,7 @@ fn get_config(data: &Arc<RwLock<ShareMap>>) -> std::result::Result<HypeBotConfig
     Ok(config.clone())
 }
 
-// Checks if the user has permission to use this bot
+/// Checks if the user has permission to use this bot
 fn permission_check(ctx: &mut Context, msg: &Message, _command_name: &str) -> bool {
     if let Some(guild_id) = msg.guild_id {
         if let Ok(config) = get_config(&ctx.data) {
@@ -368,6 +368,35 @@ fn create_event(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResu
         msg.author.id.0,
     )?;
     send_draft_event(&ctx, msg.channel_id)?;
+
+    Ok(())
+}
+
+#[command]
+/// Cancels an event
+fn cancel_event(ctx: &mut Context, _msg: &Message, mut args: Args) -> CommandResult {
+    let config = get_config(&ctx.data)?;
+
+    // Parse args
+    let event_name = args.single::<String>()?.replace("\"", "");
+
+    let event = get_event_by_name(config.db_url.clone(), event_name)?;
+    let message_id = event.message_id.parse::<u64>()?;
+    let message = ctx.http.get_message(config.event_channel, message_id)?;
+
+    let reaction_users = message
+        .reaction_users(&ctx.http, INTERESTED_EMOJI, None, None)
+        .unwrap_or(Vec::<User>::new());
+
+    let string = &format!("**{}** has been canceled!", event.event_name.clone());
+
+    for user in reaction_users {
+        send_dm_message(&ctx.http, user, &string);
+    }
+
+    remove_event(config.db_url.clone(), event.id)?;
+
+    message.delete(&ctx)?;
 
     Ok(())
 }
