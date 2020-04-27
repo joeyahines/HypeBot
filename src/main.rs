@@ -3,22 +3,32 @@ extern crate diesel;
 #[macro_use]
 extern crate diesel_migrations;
 extern crate serde;
+#[macro_use]
+extern crate log;
+extern crate log4rs;
 
 use chrono::{DateTime, Datelike, NaiveDateTime, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use clap::{App, Arg};
+use log::LevelFilter;
+use log4rs::append::file::FileAppender;
+use log4rs::config::{Appender, Config, Root};
+use log4rs::encode::pattern::PatternEncoder;
 use serenity::client::Client;
 use serenity::framework::standard::macros::{command, group, help};
 use serenity::framework::standard::{help_commands, Args, CommandGroup, HelpOptions};
 use serenity::framework::standard::{CommandError, CommandResult, StandardFramework};
 use serenity::http::Http;
 use serenity::model::channel::{Message, Reaction};
+use serenity::model::id::UserId;
 use serenity::model::prelude::{ChannelId, Ready};
+use serenity::model::user::User;
 use serenity::prelude::TypeMapKey;
 use serenity::prelude::{Context, EventHandler, RwLock, ShareMap};
 use serenity::utils::{content_safe, Colour, ContentSafeOptions};
 use serenity::CacheAndHttp;
 use serenity::Result;
+use std::collections::HashSet;
 use std::process::exit;
 use std::sync::Arc;
 use std::thread;
@@ -31,12 +41,11 @@ mod hypebot_config;
 use crate::database::models::NewEvent;
 use database::*;
 use hypebot_config::HypeBotConfig;
-use serenity::model::id::UserId;
-use serenity::model::user::User;
-use std::collections::HashSet;
 
 const INTERESTED_EMOJI: &str = "\u{2705}";
 const UNINTERESTED_EMOJI: &str = "\u{274C}";
+
+type HypeBotResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 /// Event commands group
 #[group]
@@ -83,7 +92,8 @@ impl EventHandler for Handler {
 
     /// On bot ready
     fn ready(&self, _: Context, ready: Ready) {
-        println!("Connected as {}", ready.user.name);
+        println!("Connected to Discord as {}", ready.user.name);
+        info!("Connected to Discord as {}", ready.user.name);
     }
 }
 
@@ -294,6 +304,18 @@ fn permission_check(ctx: &mut Context, msg: &Message, _command_name: &str) -> bo
     false
 }
 
+fn log_error(
+    _ctx: &mut Context,
+    _msg: &Message,
+    command_name: &str,
+    result: std::result::Result<(), CommandError>,
+) {
+    match result {
+        Ok(()) => (),
+        Err(why) => error!("Command '{}' returned error {:?}", command_name, why),
+    };
+}
+
 #[command]
 /// Posts a previewed event
 ///
@@ -454,7 +476,7 @@ fn cancel(ctx: &mut Context, _msg: &Message, mut args: Args) -> CommandResult {
 }
 
 embed_migrations!("migrations/");
-fn main() -> clap::Result<()> {
+fn main() -> HypeBotResult<()> {
     // Initialize arg parser
     let mut app = App::new("Hype Bot")
         .about("Hype Bot: Hype Up Your Discord Events!")
@@ -481,9 +503,24 @@ fn main() -> clap::Result<()> {
             }
         };
 
+        // Setup logging
+        let log_encode = Box::new(PatternEncoder::new("{d}:{l}-{m}\n"));
+
+        let logfile =
+            FileAppender::builder()
+                .encoder(log_encode)
+                .build(&cfg.log_path)?;
+
+
+        let config = Config::builder()
+            .appender(Appender::builder().build("logfile", Box::new(logfile)))
+            .build(Root::builder().appender("logfile").build(LevelFilter::Info))?;
+
+        log4rs::init_config(config)?;
+
         // Run migrations
         let connection = establish_connection(cfg.db_url.clone());
-        embedded_migrations::run(&connection).expect("Unable to run migrations");
+        embedded_migrations::run(&connection)?;
 
         // New client
         let mut client =
@@ -499,6 +536,7 @@ fn main() -> clap::Result<()> {
                         .ignore_webhooks(true)
                 })
                 .before(permission_check)
+                .after(log_error)
                 .group(&EVENTCOMMANDS_GROUP)
                 .help(&BOT_HELP),
         );
@@ -524,7 +562,8 @@ fn main() -> clap::Result<()> {
         thread::spawn(move || send_reminders(&cache_and_http, &data));
 
         // Start bot
-        println!("Starting Hypebot!");
+        info!("Starting HypeBot!");
+        println!("Starting HypeBot!");
         if let Err(why) = client.start() {
             println!("An error occurred while running the client: {:?}", why);
         }

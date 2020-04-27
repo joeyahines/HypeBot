@@ -21,4 +21,6 @@ event_channel = 0
 event_roles = 0
 # Timezone to display events
 event_timezone = "America/New_York"
+# Path to logger
+log_path = "hype_bot.log"
 ```

@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer};
 use serenity::prelude::TypeMapKey;
 use std::fmt;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct HypeBotConfig {
     pub db_url: String,
     pub default_thumbnail_link: String,
@@ -15,6 +15,7 @@ pub struct HypeBotConfig {
     pub event_roles: Vec<u64>,
     #[serde(deserialize_with = "from_tz_string")]
     pub event_timezone: Tz,
+    pub log_path: String,
 }
 
 struct ConfigValueVisitor;
@@ -57,18 +58,4 @@ impl HypeBotConfig {
 
 impl TypeMapKey for HypeBotConfig {
     type Value = HypeBotConfig;
-}
-
-impl Clone for HypeBotConfig {
-    fn clone(&self) -> Self {
-        HypeBotConfig {
-            db_url: self.db_url.clone(),
-            default_thumbnail_link: self.default_thumbnail_link.clone(),
-            discord_key: self.discord_key.clone(),
-            prefix: self.prefix.clone(),
-            event_channel: self.event_channel.clone(),
-            event_roles: self.event_roles.clone(),
-            event_timezone: self.event_timezone.clone(),
-        }
-    }
 }
