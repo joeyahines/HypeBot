@@ -255,6 +255,26 @@ fn get_config(data: &Arc<RwLock<ShareMap>>) -> std::result::Result<HypeBotConfig
     Ok(config.clone())
 }
 
+// Checks if the user has permission to use this bot
+fn permission_check(ctx: &mut Context, msg: &Message, _command_name: &str) -> bool {
+    if let Some(guild_id) = msg.guild_id {
+        if let Ok(config) = get_config(&ctx.data) {
+            if let Ok(roles) = ctx.http.get_guild_roles(guild_id.0) {
+                for role in roles {
+                    if config.event_roles.contains(&role.id.0) {
+                        return match msg.author.has_role(ctx, guild_id, role) {
+                            Ok(has_role) => has_role,
+                            Err(_) => false,
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
 #[command]
 /// Posts the pending event in the shared context
 fn confirm_event(ctx: &mut Context, msg: &Message, _args: Args) -> CommandResult {
@@ -351,6 +371,7 @@ fn create_event(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResu
 
     Ok(())
 }
+
 embed_migrations!("migrations/");
 fn main() -> clap::Result<()> {
     // Initialize arg parser
@@ -394,7 +415,9 @@ fn main() -> clap::Result<()> {
                     c.prefix(cfg.prefix.as_str().clone())
                         .allow_dm(false)
                         .ignore_bots(true)
+                        .ignore_webhooks(true)
                 })
+                .before(permission_check)
                 .group(&EVENTCOMMANDS_GROUP),
         );
 
