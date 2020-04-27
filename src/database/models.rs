@@ -1,7 +1,7 @@
 use super::schema::events;
 use chrono::NaiveDateTime;
 
-#[derive(Queryable)]
+#[derive(Queryable, Clone)]
 pub struct Event {
     /// Event ID
     pub id: i32,
@@ -17,6 +17,19 @@ pub struct Event {
     pub thumbnail_link: String,
     /// Reminder sent tracker
     pub reminder_sent: i32,
+}
+
+impl Into<NewEvent> for Event {
+    fn into(self) -> NewEvent {
+        NewEvent {
+            event_name: self.event_name.clone(),
+            event_desc: self.event_desc.clone(),
+            event_time: self.event_time.clone(),
+            message_id: self.message_id.clone(),
+            thumbnail_link: self.message_id.clone(),
+            reminder_sent: self.reminder_sent,
+        }
+    }
 }
 
 #[derive(Insertable, Clone)]

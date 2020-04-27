@@ -8,8 +8,8 @@ use chrono::{DateTime, Datelike, NaiveDateTime, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use clap::{App, Arg};
 use serenity::client::Client;
-use serenity::framework::standard::macros::{command, group};
-use serenity::framework::standard::Args;
+use serenity::framework::standard::macros::{command, group, help};
+use serenity::framework::standard::{help_commands, Args, CommandGroup, HelpOptions};
 use serenity::framework::standard::{CommandError, CommandResult, StandardFramework};
 use serenity::http::Http;
 use serenity::model::channel::{Message, Reaction};
@@ -31,14 +31,18 @@ mod hypebot_config;
 use crate::database::models::NewEvent;
 use database::*;
 use hypebot_config::HypeBotConfig;
+use serenity::model::id::UserId;
 use serenity::model::user::User;
+use std::collections::HashSet;
 
 const INTERESTED_EMOJI: &str = "\u{2705}";
 const UNINTERESTED_EMOJI: &str = "\u{274C}";
 
 /// Event commands group
 #[group]
-#[commands(create_event, confirm_event, cancel_event)]
+#[only_in(guilds)]
+#[description("Commands for Creating Events")]
+#[commands(create, confirm, cancel)]
 struct EventCommands;
 
 /// Struct for storing drafted events
@@ -81,6 +85,20 @@ impl EventHandler for Handler {
     fn ready(&self, _: Context, ready: Ready) {
         println!("Connected as {}", ready.user.name);
     }
+}
+
+#[help]
+#[command_not_found_text = "Could not find: `{}`."]
+#[strikethrough_commands_tip_in_guild("HypeBot")]
+fn bot_help(
+    context: &mut Context,
+    msg: &Message,
+    args: Args,
+    help_options: &'static HelpOptions,
+    groups: &[&'static CommandGroup],
+    owners: HashSet<UserId>,
+) -> CommandResult {
+    help_commands::with_embeds(context, msg, args, help_options, groups, owners)
 }
 
 /// Thread to send reminders to users
@@ -184,9 +202,10 @@ fn send_event_msg(
             e.title(event.event_name.clone())
                 .color(Colour::PURPLE)
                 .description(format!(
-                    "**{}**\n{}",
+                    "**{}**\n{}\n\nReact with {} below to receive event reminders!",
                     native_time.format("%A, %B %d @ %I:%M %P %t %Z"),
-                    event.event_desc
+                    event.event_desc,
+                    INTERESTED_EMOJI
                 ))
                 .thumbnail(event.thumbnail_link.clone())
                 .footer(|f| f.text("Local Event Time"))
@@ -238,7 +257,7 @@ fn send_draft_event(ctx: &Context, channel: ChannelId) -> CommandResult {
 
     channel.send_message(&ctx, |m| {
         m.content(format!(
-            "Draft message, use the `confirm_event` command to post it."
+            "Draft message, use the `confirm` command to post it."
         ))
     })?;
     send_event_msg(&ctx.http, config, channel.0, &draft_event.event, false)?;
@@ -276,32 +295,28 @@ fn permission_check(ctx: &mut Context, msg: &Message, _command_name: &str) -> bo
 }
 
 #[command]
-/// Posts the pending event in the shared context
-fn confirm_event(ctx: &mut Context, msg: &Message, _args: Args) -> CommandResult {
+/// Posts a previewed event
+///
+/// **Note**
+/// You can only post events you have created. Only one preview event can exist at a time.
+fn confirm(ctx: &mut Context, msg: &Message, _args: Args) -> CommandResult {
     let config = get_config(&ctx.data)?;
     let data = ctx.data.read();
 
     // Get draft event
     if let Some(draft_event) = data.get::<DraftEvent>() {
-        let new_event = &draft_event.event;
+        let mut new_event = draft_event.event.clone();
         // Check to to see if message author is the owner of the pending event
         if draft_event.creator_id == msg.author.id.0 {
             // Send event message
             let event_msg =
-                send_event_msg(&ctx.http, &config, config.event_channel, new_event, true)?;
+                send_event_msg(&ctx.http, &config, config.event_channel, &new_event, true)?;
 
             msg.reply(&ctx, "Event posted!")?;
 
-            let new_event = NewEvent {
-                message_id: event_msg.id.0.to_string(),
-                event_time: new_event.event_time.clone(),
-                event_desc: new_event.event_desc.clone(),
-                event_name: new_event.event_name.clone(),
-                thumbnail_link: new_event.event_name.clone(),
-                reminder_sent: 0,
-            };
+            new_event.message_id = event_msg.id.0.to_string();
 
-            insert_event(config.db_url.clone(), &new_event).ok();
+            insert_event(config.db_url.clone(), &new_event)?;
         } else {
             msg.reply(&ctx, format!("You do not have a pending event!"))?;
         }
@@ -313,8 +328,16 @@ fn confirm_event(ctx: &mut Context, msg: &Message, _args: Args) -> CommandResult
 }
 
 #[command]
-/// Creates an event and announce it
-fn create_event(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
+/// Creates an event and previews the announcement
+///
+/// `~create "event name" "04:20pm 2069-04-20" "event description" \<http://optional.thumbnail.link>`
+///
+/// **Time format**
+/// The time format is HH:MMam YYYY-MM-DD
+///
+/// **Thumbnail Link**
+/// The thumbnail link is optional, if one is not provided, a default image is shown
+fn create(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
     // Get config
     let config = get_config(&ctx.data)?;
     let guild_id = msg
@@ -322,9 +345,27 @@ fn create_event(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResu
         .ok_or(CommandError("Unable to get guild ID".to_string()))?;
 
     // Parse args
-    let event_name = args.single::<String>()?.replace("\"", "");
-    let date_string = args.single::<String>()?.replace("\"", "");
-    let description = args.single::<String>()?.replace("\"", "");
+    let event_name = match args.single::<String>() {
+        Ok(event_name) => event_name.replace("\"", ""),
+        Err(_) => {
+            msg.reply(&ctx, "No event name provided.".to_string())?;
+            return Ok(());
+        }
+    };
+    let date_string = match args.single::<String>() {
+        Ok(date_string) => date_string.replace("\"", ""),
+        Err(_) => {
+            msg.reply(&ctx, "No date provided.".to_string())?;
+            return Ok(());
+        }
+    };
+    let description = match args.single::<String>() {
+        Ok(desc) => desc.replace("\"", ""),
+        Err(_) => {
+            msg.reply(&ctx, "No description provided.".to_string())?;
+            return Ok(());
+        }
+    };
     let thumbnail_link = match args.single::<String>() {
         Ok(link) => link.replace("<", "").replace(">", ""),
         Err(_) => config.default_thumbnail_link.clone(),
@@ -332,7 +373,16 @@ fn create_event(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResu
 
     // Parse date
     let tz: Tz = config.event_timezone;
-    let input_date = NaiveDateTime::parse_from_str(date_string.as_str(), "%I:%M%p %Y-%m-%d")?;
+    let input_date = match NaiveDateTime::parse_from_str(date_string.as_str(), "%I:%M%P %Y-%m-%d") {
+        Ok(date) => date,
+        Err(_) => {
+            msg.reply(
+                &ctx,
+                "Invalid date format. Format is HH:MMam YYYY-MM-DD".to_string(),
+            )?;
+            return Ok(());
+        }
+    };
 
     let input_date = tz
         .ymd(
@@ -373,8 +423,10 @@ fn create_event(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResu
 }
 
 #[command]
-/// Cancels an event
-fn cancel_event(ctx: &mut Context, _msg: &Message, mut args: Args) -> CommandResult {
+/// Cancels an already scheduled event
+///
+/// `~create_event "event name"`
+fn cancel(ctx: &mut Context, _msg: &Message, mut args: Args) -> CommandResult {
     let config = get_config(&ctx.data)?;
 
     // Parse args
@@ -447,7 +499,8 @@ fn main() -> clap::Result<()> {
                         .ignore_webhooks(true)
                 })
                 .before(permission_check)
-                .group(&EVENTCOMMANDS_GROUP),
+                .group(&EVENTCOMMANDS_GROUP)
+                .help(&BOT_HELP),
         );
 
         // Copy config data to client data
