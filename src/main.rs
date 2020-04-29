@@ -7,27 +7,23 @@ extern crate serde;
 extern crate log;
 extern crate log4rs;
 
-use chrono::{DateTime, Datelike, NaiveDateTime, TimeZone, Timelike, Utc};
-use chrono_tz::Tz;
+use chrono::{DateTime, Utc};
 use clap::{App, Arg};
 use log::LevelFilter;
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Config, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use serenity::client::Client;
-use serenity::framework::standard::macros::{command, group, help};
+use serenity::framework::standard::macros::{group, help};
 use serenity::framework::standard::{help_commands, Args, CommandGroup, HelpOptions};
-use serenity::framework::standard::{CommandError, CommandResult, StandardFramework};
-use serenity::http::Http;
+use serenity::framework::standard::{CommandResult, StandardFramework};
 use serenity::model::channel::{Message, Reaction};
 use serenity::model::id::UserId;
-use serenity::model::prelude::{ChannelId, Ready};
+use serenity::model::prelude::Ready;
 use serenity::model::user::User;
 use serenity::prelude::TypeMapKey;
 use serenity::prelude::{Context, EventHandler, RwLock, ShareMap};
-use serenity::utils::{content_safe, Colour, ContentSafeOptions};
 use serenity::CacheAndHttp;
-use serenity::Result;
 use std::collections::HashSet;
 use std::process::exit;
 use std::sync::Arc;
@@ -36,10 +32,15 @@ use std::thread::sleep;
 use std::time::Duration;
 
 mod database;
+mod discord;
 mod hypebot_config;
 
-use crate::database::models::NewEvent;
+use database::models::NewEvent;
 use database::*;
+use discord::events::{CANCEL_COMMAND, CONFIRM_COMMAND, CREATE_COMMAND};
+use discord::{
+    get_config, log_error, permission_check, send_dm_message, send_message_to_reaction_users,
+};
 use hypebot_config::HypeBotConfig;
 
 const INTERESTED_EMOJI: &str = "\u{2705}";
@@ -47,7 +48,7 @@ const UNINTERESTED_EMOJI: &str = "\u{274C}";
 
 type HypeBotResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// Event commands group
+/// Event discord group
 #[group]
 #[only_in(guilds)]
 #[description("Commands for Creating Events")]
@@ -158,319 +159,20 @@ fn send_reminders(cache_and_http: &Arc<CacheAndHttp>, data: &Arc<RwLock<ShareMap
     }
 }
 
-/// Send a message to a reaction user
-///
-/// Message will be sent in the format
-/// ```
-/// "{msg_text} **event_name**"
-/// ```
-fn send_message_to_reaction_users(ctx: &Context, reaction: &Reaction, msg_text: &str) {
-    if let Ok(config) = get_config(&ctx.data) {
-        let db_link = config.db_url.clone();
-        let message_id = reaction.message_id.0.to_string();
+/// Does the setup for logging
+fn setup_logging(config: &HypeBotConfig) -> HypeBotResult<()> {
+    // Setup logging
+    let log_encode = Box::new(PatternEncoder::new("{d}:{l}-{m}\n"));
 
-        let event = match get_event_by_msg_id(db_link, message_id) {
-            Ok(event) => event,
-            Err(_) => {
-                return;
-            }
-        };
+    let logfile = FileAppender::builder()
+        .encoder(log_encode)
+        .build(&config.log_path)?;
 
-        // Format message
-        let msg: String = format!("{} **{}**", msg_text, event.event_name);
+    let log_config = Config::builder()
+        .appender(Appender::builder().build("logfile", Box::new(logfile)))
+        .build(Root::builder().appender("logfile").build(LevelFilter::Info))?;
 
-        if let Ok(user) = reaction.user(&ctx.http) {
-            send_dm_message(&ctx.http, user, &msg);
-        }
-    }
-}
-
-/// Send a DM message to a user
-fn send_dm_message(http: &Http, user: User, message: &String) {
-    if let Ok(dm_channel) = user.create_dm_channel(&http) {
-        dm_channel.send_message(&http, |m| m.content(message)).ok();
-    }
-}
-
-/// Sends the event message to the event channel
-fn send_event_msg(
-    http: &Http,
-    config: &HypeBotConfig,
-    channel_id: u64,
-    event: &NewEvent,
-    react: bool,
-) -> Result<Message> {
-    let channel = http.get_channel(channel_id)?;
-
-    let utc_time = DateTime::<Utc>::from_utc(event.event_time.clone(), Utc);
-
-    let native_time = utc_time.with_timezone(&config.event_timezone);
-
-    // Send message
-    let msg = channel.id().send_message(&http, |m| {
-        m.embed(|e| {
-            e.title(event.event_name.clone())
-                .color(Colour::PURPLE)
-                .description(format!(
-                    "**{}**\n{}\n\nReact with {} below to receive event reminders!",
-                    native_time.format("%A, %B %d @ %I:%M %P %t %Z"),
-                    event.event_desc,
-                    INTERESTED_EMOJI
-                ))
-                .thumbnail(event.thumbnail_link.clone())
-                .footer(|f| f.text("Local Event Time"))
-                .timestamp(utc_time.to_rfc3339())
-        })
-    })?;
-
-    if react {
-        // Add reacts
-        msg.react(http, INTERESTED_EMOJI)?;
-        msg.react(http, UNINTERESTED_EMOJI)?;
-    }
-
-    Ok(msg)
-}
-
-/// Updates the draft event stored in the context data
-fn update_draft_event(
-    ctx: &Context,
-    event_name: String,
-    event_desc: String,
-    thumbnail: String,
-    event_time: NaiveDateTime,
-    creator_id: u64,
-) -> CommandResult {
-    let mut data = ctx.data.write();
-    let mut draft_event = data
-        .get_mut::<DraftEvent>()
-        .ok_or(CommandError("Unable get draft event!".to_string()))?;
-
-    draft_event.event.event_name = event_name;
-    draft_event.event.event_desc = event_desc;
-    draft_event.event.thumbnail_link = thumbnail;
-    draft_event.event.message_id = String::new();
-    draft_event.event.event_time = event_time;
-    draft_event.creator_id = creator_id;
-    Ok(())
-}
-
-/// Sends the draft event stored in the context data
-fn send_draft_event(ctx: &Context, channel: ChannelId) -> CommandResult {
-    let data = ctx.data.read();
-    let config = data
-        .get::<HypeBotConfig>()
-        .ok_or(CommandError("Config not found!".to_string()))?;
-    let draft_event = data
-        .get::<DraftEvent>()
-        .ok_or(CommandError("Draft event not found!".to_string()))?;
-
-    channel.send_message(&ctx, |m| {
-        m.content(format!(
-            "Draft message, use the `confirm` command to post it."
-        ))
-    })?;
-    send_event_msg(&ctx.http, config, channel.0, &draft_event.event, false)?;
-    Ok(())
-}
-
-/// Gets the config from context data
-fn get_config(data: &Arc<RwLock<ShareMap>>) -> std::result::Result<HypeBotConfig, CommandError> {
-    let data_read = data.read();
-    let config = data_read
-        .get::<HypeBotConfig>()
-        .ok_or(CommandError("Unable to get config".to_string()))?;
-
-    Ok(config.clone())
-}
-
-/// Checks if the user has permission to use this bot
-fn permission_check(ctx: &mut Context, msg: &Message, _command_name: &str) -> bool {
-    if let Some(guild_id) = msg.guild_id {
-        if let Ok(config) = get_config(&ctx.data) {
-            if let Ok(roles) = ctx.http.get_guild_roles(guild_id.0) {
-                for role in roles {
-                    if config.event_roles.contains(&role.id.0) {
-                        return match msg.author.has_role(ctx, guild_id, role) {
-                            Ok(has_role) => has_role,
-                            Err(_) => false,
-                        };
-                    }
-                }
-            }
-        }
-    }
-
-    false
-}
-
-fn log_error(
-    _ctx: &mut Context,
-    _msg: &Message,
-    command_name: &str,
-    result: std::result::Result<(), CommandError>,
-) {
-    match result {
-        Ok(()) => (),
-        Err(why) => error!("Command '{}' returned error {:?}", command_name, why),
-    };
-}
-
-#[command]
-/// Posts a previewed event
-///
-/// **Note**
-/// You can only post events you have created. Only one preview event can exist at a time.
-fn confirm(ctx: &mut Context, msg: &Message, _args: Args) -> CommandResult {
-    let config = get_config(&ctx.data)?;
-    let data = ctx.data.read();
-
-    // Get draft event
-    if let Some(draft_event) = data.get::<DraftEvent>() {
-        let mut new_event = draft_event.event.clone();
-        // Check to to see if message author is the owner of the pending event
-        if draft_event.creator_id == msg.author.id.0 {
-            // Send event message
-            let event_msg =
-                send_event_msg(&ctx.http, &config, config.event_channel, &new_event, true)?;
-
-            msg.reply(&ctx, "Event posted!")?;
-
-            new_event.message_id = event_msg.id.0.to_string();
-
-            insert_event(config.db_url.clone(), &new_event)?;
-        } else {
-            msg.reply(&ctx, format!("You do not have a pending event!"))?;
-        }
-    } else {
-        msg.reply(&ctx, format!("There are no pending events!!"))?;
-    }
-
-    Ok(())
-}
-
-#[command]
-/// Creates an event and previews the announcement
-///
-/// `~create "event name" "04:20pm 2069-04-20" "event description" \<http://optional.thumbnail.link>`
-///
-/// **Time format**
-/// The time format is HH:MMam YYYY-MM-DD
-///
-/// **Thumbnail Link**
-/// The thumbnail link is optional, if one is not provided, a default image is shown
-fn create(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
-    // Get config
-    let config = get_config(&ctx.data)?;
-    let guild_id = msg
-        .guild_id
-        .ok_or(CommandError("Unable to get guild ID".to_string()))?;
-
-    // Parse args
-    let event_name = match args.single::<String>() {
-        Ok(event_name) => event_name.replace("\"", ""),
-        Err(_) => {
-            msg.reply(&ctx, "No event name provided.".to_string())?;
-            return Ok(());
-        }
-    };
-    let date_string = match args.single::<String>() {
-        Ok(date_string) => date_string.replace("\"", ""),
-        Err(_) => {
-            msg.reply(&ctx, "No date provided.".to_string())?;
-            return Ok(());
-        }
-    };
-    let description = match args.single::<String>() {
-        Ok(desc) => desc.replace("\"", ""),
-        Err(_) => {
-            msg.reply(&ctx, "No description provided.".to_string())?;
-            return Ok(());
-        }
-    };
-    let thumbnail_link = match args.single::<String>() {
-        Ok(link) => link.replace("<", "").replace(">", ""),
-        Err(_) => config.default_thumbnail_link.clone(),
-    };
-
-    // Parse date
-    let tz: Tz = config.event_timezone;
-    let input_date = match NaiveDateTime::parse_from_str(date_string.as_str(), "%I:%M%P %Y-%m-%d") {
-        Ok(date) => date,
-        Err(_) => {
-            msg.reply(
-                &ctx,
-                "Invalid date format. Format is HH:MMam YYYY-MM-DD".to_string(),
-            )?;
-            return Ok(());
-        }
-    };
-
-    let input_date = tz
-        .ymd(
-            input_date.date().year(),
-            input_date.date().month(),
-            input_date.date().day(),
-        )
-        .and_hms(
-            input_date.time().hour(),
-            input_date.time().minute(),
-            input_date.time().second(),
-        );
-
-    let event_time = input_date.with_timezone(&Utc).naive_utc();
-
-    // Clean channel, role, and everyone pings
-    let settings = ContentSafeOptions::default()
-        .clean_role(true)
-        .clean_here(true)
-        .clean_user(true)
-        .clean_everyone(true)
-        .display_as_member_from(guild_id);
-
-    let description = content_safe(&ctx.cache, description, &settings);
-    let event_name = content_safe(&ctx.cache, event_name, &settings);
-
-    update_draft_event(
-        &ctx,
-        event_name,
-        description,
-        thumbnail_link,
-        event_time,
-        msg.author.id.0,
-    )?;
-    send_draft_event(&ctx, msg.channel_id)?;
-
-    Ok(())
-}
-
-#[command]
-/// Cancels an already scheduled event
-///
-/// `~create_event "event name"`
-fn cancel(ctx: &mut Context, _msg: &Message, mut args: Args) -> CommandResult {
-    let config = get_config(&ctx.data)?;
-
-    // Parse args
-    let event_name = args.single::<String>()?.replace("\"", "");
-
-    let event = get_event_by_name(config.db_url.clone(), event_name)?;
-    let message_id = event.message_id.parse::<u64>()?;
-    let message = ctx.http.get_message(config.event_channel, message_id)?;
-
-    let reaction_users = message
-        .reaction_users(&ctx.http, INTERESTED_EMOJI, None, None)
-        .unwrap_or(Vec::<User>::new());
-
-    let string = &format!("**{}** has been canceled!", event.event_name.clone());
-
-    for user in reaction_users {
-        send_dm_message(&ctx.http, user, &string);
-    }
-
-    remove_event(config.db_url.clone(), event.id)?;
-
-    message.delete(&ctx)?;
+    log4rs::init_config(log_config)?;
 
     Ok(())
 }
@@ -504,19 +206,7 @@ fn main() -> HypeBotResult<()> {
         };
 
         // Setup logging
-        let log_encode = Box::new(PatternEncoder::new("{d}:{l}-{m}\n"));
-
-        let logfile =
-            FileAppender::builder()
-                .encoder(log_encode)
-                .build(&cfg.log_path)?;
-
-
-        let config = Config::builder()
-            .appender(Appender::builder().build("logfile", Box::new(logfile)))
-            .build(Root::builder().appender("logfile").build(LevelFilter::Info))?;
-
-        log4rs::init_config(config)?;
+        setup_logging(&cfg)?;
 
         // Run migrations
         let connection = establish_connection(cfg.db_url.clone());
