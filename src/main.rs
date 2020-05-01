@@ -75,7 +75,7 @@ impl EventHandler for Handler {
             send_message_to_reaction_users(
                 &ctx,
                 &reaction,
-                "Hello, you are now receiving reminders for",
+                "Hello, you are now receiving reminders for **{event}**",
             );
         }
     }
@@ -86,7 +86,7 @@ impl EventHandler for Handler {
             send_message_to_reaction_users(
                 &ctx,
                 &reaction,
-                "Hello, you are no longer receiving reminders for",
+                "Hello, you are no longer receiving reminders for **{event}**",
             );
         }
     }
@@ -127,10 +127,11 @@ fn send_reminders(cache_and_http: &Arc<CacheAndHttp>, data: &Arc<RwLock<ShareMap
                 if let Ok(message_id) = event.message_id.parse::<u64>() {
                     // Get time to event
                     let utc_time = DateTime::<Utc>::from_utc(event.event_time.clone(), Utc);
-                    let time_to_event = (utc_time - chrono::offset::Utc::now()).num_minutes();
+                    let current_time = chrono::offset::Utc::now();
+                    let time_to_event = (utc_time - current_time).num_minutes();
                     // If the event starts in less than 10 minutes
-                    if time_to_event <= 10 && time_to_event > 0 && event.reminder_sent == 1 {
-                        // Get message isd
+                    if time_to_event <= 10 && time_to_event > 0 && event.reminder_sent < 1 {
+                        // Get message id
                         if let Ok(message) = http.get_message(event_channel_id, message_id) {
                             let reaction_users = message
                                 .reaction_users(&http, INTERESTED_EMOJI, None, None)

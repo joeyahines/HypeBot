@@ -1,7 +1,7 @@
 use super::schema::events;
 use chrono::NaiveDateTime;
 
-#[derive(Queryable, Clone)]
+#[derive(Queryable, Clone, Debug)]
 pub struct Event {
     /// Event ID
     pub id: i32,
@@ -32,7 +32,7 @@ impl Into<NewEvent> for Event {
     }
 }
 
-#[derive(Insertable, Clone)]
+#[derive(Insertable, Clone, Debug)]
 #[table_name = "events"]
 pub struct NewEvent {
     /// Event name

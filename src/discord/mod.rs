@@ -10,15 +10,12 @@ use serenity::prelude::{Context, RwLock, ShareMap};
 use serenity::utils::Colour;
 use serenity::Result;
 use std::sync::Arc;
+use strfmt::strfmt;
+use std::collections::HashMap;
 
 pub mod events;
 
 /// Send a message to a reaction user
-///
-/// Message will be sent in the format
-/// ```
-/// "{msg_text} **event_name**"
-/// ```
 pub fn send_message_to_reaction_users(ctx: &Context, reaction: &Reaction, msg_text: &str) {
     if let Ok(config) = get_config(&ctx.data) {
         let db_link = config.db_url.clone();
@@ -31,8 +28,21 @@ pub fn send_message_to_reaction_users(ctx: &Context, reaction: &Reaction, msg_te
             }
         };
 
-        // Format message
-        let msg: String = format!("{} **{}**", msg_text, event.event_name);
+        let event_utc_time = DateTime::<Utc>::from_utc(event.event_time.clone(), Utc);
+        let current_utc_time = chrono::offset::Utc::now();
+
+        let msg;
+
+        if event_utc_time > current_utc_time {
+            // Format message
+            let mut fmt = HashMap::new();
+            fmt.insert("event".to_string(), event.event_name);
+            msg = strfmt(msg_text, &fmt).unwrap();
+        }
+        else {
+            msg = format!("**{}** has already started!", &event.event_name)
+        }
+
 
         if let Ok(user) = reaction.user(&ctx.http) {
             send_dm_message(&ctx.http, user, &msg);
