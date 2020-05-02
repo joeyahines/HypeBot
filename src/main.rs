@@ -48,7 +48,7 @@ const UNINTERESTED_EMOJI: &str = "\u{274C}";
 
 type HypeBotResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// Event discord group
+/// Event command group
 #[group]
 #[only_in(guilds)]
 #[description("Commands for Creating Events")]
@@ -241,7 +241,9 @@ fn main() -> HypeBotResult<()> {
                     message_id: String::new(),
                     event_time: Utc::now().naive_utc(),
                     event_name: String::new(),
+                    organizer: String::new(),
                     event_desc: String::new(),
+                    event_loc: String::new(),
                     thumbnail_link: String::new(),
                     reminder_sent: 0 as i32,
                 },

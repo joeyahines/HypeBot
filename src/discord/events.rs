@@ -5,10 +5,11 @@ use crate::{DraftEvent, INTERESTED_EMOJI};
 use chrono::offset::TimeZone;
 use chrono::{Datelike, NaiveDateTime, Timelike, Utc};
 use chrono_tz::Tz;
-use serenity::framework::standard::{macros::command, Args, CommandError, CommandResult};
-use serenity::model::prelude::{Message, User};
+use serenity::framework::standard::{macros::command, Args, CommandResult};
+use serenity::model::prelude::{Mentionable, Message, User};
 use serenity::prelude::Context;
 use serenity::utils::{content_safe, ContentSafeOptions};
+use url::Url;
 
 #[command]
 /// Posts a previewed event
@@ -46,45 +47,59 @@ fn confirm(ctx: &mut Context, msg: &Message, _args: Args) -> CommandResult {
 #[command]
 /// Creates an event and previews the announcement
 ///
-/// `~create "event name" "04:20pm 2069-04-20" "event description" <http://optional.thumbnail.link>`
+/// `~create "event name" "04:20pm 2069-04-20" "event description" "http://optional.thumbnail.link" "optional organizer`
 ///
 /// **Time format**
 /// The time format is HH:MMam YYYY-MM-DD
 ///
 /// **Thumbnail Link**
 /// The thumbnail link is optional, if one is not provided, a default image is shown
+///
+/// **Organizer**
+/// The user or group that is organizing the event, defaults to the user creating the event
 fn create(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
     // Get config
     let config = get_config(&ctx.data)?;
-    let guild_id = msg
-        .guild_id
-        .ok_or(CommandError("Unable to get guild ID".to_string()))?;
 
     // Parse args
-    let event_name = match args.single::<String>() {
+    let event_name = match args.find::<String>() {
         Ok(event_name) => event_name.replace("\"", ""),
         Err(_) => {
             msg.reply(&ctx, "No event name provided.".to_string())?;
             return Ok(());
         }
     };
-    let date_string = match args.single::<String>() {
+    let date_string = match args.find::<String>() {
         Ok(date_string) => date_string.replace("\"", ""),
         Err(_) => {
             msg.reply(&ctx, "No date provided.".to_string())?;
             return Ok(());
         }
     };
-    let description = match args.single::<String>() {
+    let description = match args.find::<String>() {
         Ok(desc) => desc.replace("\"", ""),
         Err(_) => {
             msg.reply(&ctx, "No description provided.".to_string())?;
             return Ok(());
         }
     };
-    let thumbnail_link = match args.single::<String>() {
-        Ok(link) => link.replace("<", "").replace(">", ""),
+
+    let location = match args.find::<String>() {
+        Ok(desc) => desc.replace("\"", ""),
+        Err(_) => {
+            msg.reply(&ctx, "No location provided.".to_string())?;
+            return Ok(());
+        }
+    };
+
+    let thumbnail_link = match args.find::<Url>() {
+        Ok(link) => link.into_string(),
         Err(_) => config.default_thumbnail_link.clone(),
+    };
+
+    let organizer = match args.find::<String>() {
+        Ok(link) => link.replace("\"", ""),
+        Err(_) => msg.author.mention(),
     };
 
     // Parse date
@@ -114,21 +129,29 @@ fn create(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
 
     let event_time = input_date.with_timezone(&Utc).naive_utc();
 
+    if Utc::now().naive_utc() > event_time {
+        msg.reply(&ctx, "The scheduled time has already passed!")?;
+        return Ok(());
+    }
+
     // Clean channel, role, and everyone pings
     let settings = ContentSafeOptions::default()
         .clean_role(true)
         .clean_here(true)
-        .clean_user(true)
-        .clean_everyone(true)
-        .display_as_member_from(guild_id);
+        .clean_user(false)
+        .clean_everyone(true);
 
     let description = content_safe(&ctx.cache, description, &settings);
     let event_name = content_safe(&ctx.cache, event_name, &settings);
+    let location = content_safe(&ctx.cache, location, &settings);
+    let organizer = content_safe(&ctx.cache, organizer, &settings);
 
     update_draft_event(
         &ctx,
         event_name,
         description,
+        organizer,
+        location,
         thumbnail_link,
         event_time,
         msg.author.id.0,

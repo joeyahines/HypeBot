@@ -9,9 +9,9 @@ use serenity::model::prelude::{ChannelId, Message, Reaction, User};
 use serenity::prelude::{Context, RwLock, ShareMap};
 use serenity::utils::Colour;
 use serenity::Result;
+use std::collections::HashMap;
 use std::sync::Arc;
 use strfmt::strfmt;
-use std::collections::HashMap;
 
 pub mod events;
 
@@ -38,11 +38,9 @@ pub fn send_message_to_reaction_users(ctx: &Context, reaction: &Reaction, msg_te
             let mut fmt = HashMap::new();
             fmt.insert("event".to_string(), event.event_name);
             msg = strfmt(msg_text, &fmt).unwrap();
-        }
-        else {
+        } else {
             msg = format!("**{}** has already started!", &event.event_name)
         }
-
 
         if let Ok(user) = reaction.user(&ctx.http) {
             send_dm_message(&ctx.http, user, &msg);
@@ -85,6 +83,8 @@ pub fn send_event_msg(
                 .thumbnail(event.thumbnail_link.clone())
                 .footer(|f| f.text("Local Event Time"))
                 .timestamp(utc_time.to_rfc3339())
+                .field("Location", &event.event_loc, true)
+                .field("Organizer", &event.organizer, true)
         })
     })?;
 
@@ -102,6 +102,8 @@ pub fn update_draft_event(
     ctx: &Context,
     event_name: String,
     event_desc: String,
+    organizer: String,
+    location: String,
     thumbnail: String,
     event_time: NaiveDateTime,
     creator_id: u64,
@@ -113,6 +115,8 @@ pub fn update_draft_event(
 
     draft_event.event.event_name = event_name;
     draft_event.event.event_desc = event_desc;
+    draft_event.event.event_loc = location;
+    draft_event.event.organizer = organizer;
     draft_event.event.thumbnail_link = thumbnail;
     draft_event.event.message_id = String::new();
     draft_event.event.event_time = event_time;

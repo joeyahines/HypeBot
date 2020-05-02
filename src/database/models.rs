@@ -9,6 +9,10 @@ pub struct Event {
     pub event_name: String,
     /// Event long description
     pub event_desc: String,
+    /// Event location
+    pub event_loc: String,
+    /// Event organizer
+    pub organizer: String,
     /// Event datetime
     pub event_time: NaiveDateTime,
     /// Event discord message id
@@ -24,6 +28,8 @@ impl Into<NewEvent> for Event {
         NewEvent {
             event_name: self.event_name.clone(),
             event_desc: self.event_desc.clone(),
+            organizer: self.organizer.clone(),
+            event_loc: self.event_loc.clone(),
             event_time: self.event_time.clone(),
             message_id: self.message_id.clone(),
             thumbnail_link: self.message_id.clone(),
@@ -39,6 +45,10 @@ pub struct NewEvent {
     pub event_name: String,
     /// Event long description
     pub event_desc: String,
+    /// Event location
+    pub event_loc: String,
+    /// Event organizer
+    pub organizer: String,
     /// Event datetime
     pub event_time: NaiveDateTime,
     /// Event discord message id
