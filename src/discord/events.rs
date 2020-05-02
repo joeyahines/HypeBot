@@ -47,7 +47,7 @@ fn confirm(ctx: &mut Context, msg: &Message, _args: Args) -> CommandResult {
 #[command]
 /// Creates an event and previews the announcement
 ///
-/// `~create "event name" "04:20pm 2069-04-20" "event description" "http://optional.thumbnail.link" "optional organizer`
+/// `~create "event name" "04:20pm 2069-04-20" "event description" "http://optional.thumbnail.link" "optional organizer"`
 ///
 /// **Time format**
 /// The time format is HH:MMam YYYY-MM-DD
