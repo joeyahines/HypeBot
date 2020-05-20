@@ -10,13 +10,11 @@ Creating an event can be done using the `create` command.
 
 This creates a draft event that the user can then review:
 
-![create event example]
-(https://i.imgur.com/9jTko9W.png)
+![create event example](https://i.imgur.com/9jTko9W.png)
 
 A user can then using the `confirm` command to create the event and publish it:
 
-![announcment]
-(https://i.imgur.com/AeTE1v2.png)
+![announcement](https://i.imgur.com/AeTE1v2.png)
 
 Users who react with ✅ will then be sent reminders about the event as private message.
 
