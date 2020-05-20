@@ -175,10 +175,13 @@ pub fn permission_check(ctx: &mut Context, msg: &Message, _command_name: &str) -
             if let Ok(roles) = ctx.http.get_guild_roles(guild_id.0) {
                 for role in roles {
                     if config.event_roles.contains(&role.id.0) {
-                        return match msg.author.has_role(ctx, guild_id, role) {
+                        let has_role = match msg.author.has_role(&ctx, guild_id, role) {
                             Ok(has_role) => has_role,
                             Err(_) => false,
                         };
+                        if has_role {
+                            return true
+                        }
                     }
                 }
             }
