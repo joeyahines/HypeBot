@@ -1,11 +1,29 @@
 # HypeBot
 A Discord bot for managing events. Uses [Serenity](https://github.com/serenity-rs/serenity) for the bot framework
-and [Disel](http://diesel.rs/) as an ORM.
+and [Diesel](http://diesel.rs/) as an ORM.
+
+## Usage
+Creating an event can be done using the `create` command.
+```
+~create "Test Event" "5:35PM 2020-05-17" "A very cool test event!" "Cool Place"
+```
+
+This creates a draft event that the user can then review:
+
+![create event example]
+(https://i.imgur.com/9jTko9W.png)
+
+A user can then using the `confirm` command to create the event and publish it:
+
+![announcment]
+(https://i.imgur.com/AeTE1v2.png)
+
+Users who react with ✅ will then be sent reminders about the event as private message.
 
 ## Running
 `./hype_bot config.toml`
 
-##Config
+## Config
 ```toml
 # Database URL
 db_url = "mysql://[user]:[password]@localhost/hypebot_db"
