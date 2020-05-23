@@ -64,7 +64,8 @@ struct Handler;
 impl EventHandler for Handler {
     /// On reaction add
     fn reaction_add(&self, ctx: Context, reaction: Reaction) {
-        if reaction.emoji.as_data() == INTERESTED_EMOJI {
+        let config = get_config(&ctx.data).unwrap();
+        if reaction.channel_id.0 == config.event_channel && reaction.emoji.as_data() == INTERESTED_EMOJI {
             send_message_to_reaction_users(
                 &ctx,
                 &reaction,
@@ -75,7 +76,8 @@ impl EventHandler for Handler {
 
     /// On reaction remove
     fn reaction_remove(&self, ctx: Context, reaction: Reaction) {
-        if reaction.emoji.as_data() == INTERESTED_EMOJI {
+        let config = get_config(&ctx.data).unwrap();
+        if reaction.channel_id.0 == config.event_channel && reaction.emoji.as_data() == INTERESTED_EMOJI {
             send_message_to_reaction_users(
                 &ctx,
                 &reaction,
