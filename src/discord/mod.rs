@@ -1,19 +1,38 @@
-use crate::database::get_event_by_msg_id;
-use crate::database::models::NewEvent;
+use crate::database::models::{Event, NewEvent};
+use crate::database::{get_event_by_msg_id, remove_event, set_reminder};
 use crate::hypebot_config::HypeBotConfig;
-use crate::{DraftEvent, INTERESTED_EMOJI, UNINTERESTED_EMOJI};
+use crate::{INTERESTED_EMOJI, UNINTERESTED_EMOJI};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serenity::framework::standard::{CommandError, CommandResult};
 use serenity::http::Http;
 use serenity::model::prelude::{ChannelId, Message, Reaction, User};
+use serenity::prelude::TypeMapKey;
 use serenity::prelude::{Context, RwLock, ShareMap};
 use serenity::utils::Colour;
 use serenity::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use strfmt::strfmt;
+use white_rabbit::{DateResult, Scheduler};
 
 pub mod events;
+
+/// Struct for storing drafted events
+#[derive(Clone)]
+pub struct DraftEvent {
+    pub event: NewEvent,
+    pub creator_id: u64,
+}
+
+impl TypeMapKey for DraftEvent {
+    type Value = DraftEvent;
+}
+
+pub struct SchedulerKey;
+
+impl TypeMapKey for SchedulerKey {
+    type Value = Arc<RwLock<Scheduler>>;
+}
 
 /// Send a message to a reaction user
 pub fn send_message_to_reaction_users(ctx: &Context, reaction: &Reaction, msg_text: &str) {
@@ -155,6 +174,29 @@ pub fn get_config(
     Ok(config.clone())
 }
 
+/// Gets the draft event from context data
+pub fn get_draft_event(
+    data: &Arc<RwLock<ShareMap>>,
+) -> std::result::Result<DraftEvent, CommandError> {
+    let data_read = data.read();
+    let draft_event = data_read
+        .get::<DraftEvent>()
+        .ok_or(CommandError("Unable to queued event".to_string()))?;
+
+    Ok(draft_event.clone())
+}
+
+/// Get the scheduler
+pub fn get_scheduler(
+    data: &Arc<RwLock<ShareMap>>,
+) -> std::result::Result<Arc<RwLock<Scheduler>>, CommandError> {
+    let mut context = data.write();
+    Ok(context
+        .get_mut::<SchedulerKey>()
+        .ok_or(CommandError("Unable to scheduler".to_string()))?
+        .clone())
+}
+
 /// Logs command errors to the logger
 pub fn log_error(
     _ctx: &mut Context,
@@ -180,7 +222,7 @@ pub fn permission_check(ctx: &mut Context, msg: &Message, _command_name: &str) -
                             Err(_) => false,
                         };
                         if has_role {
-                            return true
+                            return true;
                         }
                     }
                 }
@@ -189,4 +231,76 @@ pub fn permission_check(ctx: &mut Context, msg: &Message, _command_name: &str) -
     }
 
     false
+}
+
+pub fn schedule_event(http: &Arc<Http>, data: &Arc<RwLock<ShareMap>>, event: &Event) {
+    let scheduler = {
+        let mut context = data.write();
+        context
+            .get_mut::<SchedulerKey>()
+            .expect("Expected Scheduler.")
+            .clone()
+    };
+
+    if event.reminder_sent < 1 {
+        let event_time: DateTime<Utc> = DateTime::<Utc>::from_utc(event.event_time.clone(), Utc);
+        let reminder_time = event_time - chrono::Duration::minutes(10);
+        let mut scheduler = scheduler.write();
+        let http = http.clone();
+        let data = data.clone();
+        let event = event.clone();
+
+        scheduler.add_task_datetime(reminder_time, move |_| send_reminders(&http, &data, &event));
+    }
+}
+
+/// Send reminders
+pub fn send_reminders(http: &Arc<Http>, data: &Arc<RwLock<ShareMap>>, event: &Event) -> DateResult {
+    let config = get_config(&data).unwrap();
+    let event_channel_id = config.event_channel;
+    let event_time: DateTime<Utc> = DateTime::<Utc>::from_utc(event.event_time.clone(), Utc);
+    let delete_time = event_time + chrono::Duration::minutes(60);
+
+    if let Ok(message_id) = event.message_id.parse::<u64>() {
+        // Get message id
+        if let Ok(message) = http.get_message(event_channel_id, message_id) {
+            let reaction_users = message
+                .reaction_users(&http, INTERESTED_EMOJI, None, None)
+                .unwrap_or(Vec::<User>::new());
+
+            // Build reminder message
+            let msg: String = format!("Hello! **{}** is starting soon!", &event.event_name);
+
+            // Send reminder to each reacted user
+            for user in reaction_users {
+                send_dm_message(&http, user, &msg);
+            }
+        }
+
+        set_reminder(config.db_url.clone(), event.id, 1).ok();
+
+        let scheduler = get_scheduler(data).unwrap();
+        let mut scheduler = scheduler.write();
+
+        let http = http.clone();
+        let data = data.clone();
+        let event = event.clone();
+
+        scheduler.add_task_datetime(delete_time, move |_| {
+            delete_event(&http, &data, &event);
+            DateResult::Done
+        });
+    }
+
+    DateResult::Done
+}
+
+/// Delete event
+pub fn delete_event(http: &Arc<Http>, data: &Arc<RwLock<ShareMap>>, event: &Event) {
+    let config = get_config(&data).unwrap();
+
+    remove_event(config.db_url.clone(), event.id).ok();
+    if let Ok(message_id) = event.message_id.parse::<u64>() {
+        http.delete_message(config.event_channel, message_id).ok();
+    }
 }

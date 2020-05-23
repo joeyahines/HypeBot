@@ -1,7 +1,9 @@
 use super::{get_config, send_event_msg};
 use crate::database::{get_event_by_name, insert_event, remove_event};
-use crate::discord::{send_dm_message, send_draft_event, update_draft_event};
-use crate::{DraftEvent, INTERESTED_EMOJI};
+use crate::discord::{
+    get_draft_event, schedule_event, send_dm_message, send_draft_event, update_draft_event,
+};
+use crate::INTERESTED_EMOJI;
 use chrono::offset::TimeZone;
 use chrono::{Datelike, NaiveDateTime, Timelike, Utc};
 use chrono_tz::Tz;
@@ -18,27 +20,23 @@ use url::Url;
 /// You can only post events you have created. Only one preview event can exist at a time.
 fn confirm(ctx: &mut Context, msg: &Message, _args: Args) -> CommandResult {
     let config = get_config(&ctx.data)?;
-    let data = ctx.data.read();
+    let draft_event = get_draft_event(&ctx.data)?;
 
-    // Get draft event
-    if let Some(draft_event) = data.get::<DraftEvent>() {
-        let mut new_event = draft_event.event.clone();
-        // Check to to see if message author is the owner of the pending event
-        if draft_event.creator_id == msg.author.id.0 {
-            // Send event message
-            let event_msg =
-                send_event_msg(&ctx.http, &config, config.event_channel, &new_event, true)?;
+    let mut new_event = draft_event.event.clone();
+    // Check to to see if message author is the owner of the pending event
+    if draft_event.creator_id == msg.author.id.0 {
+        // Send event message
+        let event_msg = send_event_msg(&ctx.http, &config, config.event_channel, &new_event, true)?;
 
-            msg.reply(&ctx, "Event posted!")?;
+        msg.reply(&ctx, "Event posted!")?;
 
-            new_event.message_id = event_msg.id.0.to_string();
+        new_event.message_id = event_msg.id.0.to_string();
 
-            insert_event(config.db_url.clone(), &new_event)?;
-        } else {
-            msg.reply(&ctx, format!("You do not have a pending event!"))?;
-        }
+        let event = insert_event(config.db_url.clone(), &new_event)?;
+
+        schedule_event(&ctx.http, &ctx.data, &event);
     } else {
-        msg.reply(&ctx, format!("There are no pending events!!"))?;
+        msg.reply(&ctx, format!("You do not have a pending event!"))?;
     }
 
     Ok(())
@@ -179,7 +177,7 @@ fn cancel(ctx: &mut Context, _msg: &Message, mut args: Args) -> CommandResult {
         .reaction_users(&ctx.http, INTERESTED_EMOJI, None, None)
         .unwrap_or(Vec::<User>::new());
 
-    let string = &format!("**{}** has been canceled!", event.event_name.clone());
+    let string = format!("**{}** has been canceled!", event.event_name.clone());
 
     for user in reaction_users {
         send_dm_message(&ctx.http, user, &string);

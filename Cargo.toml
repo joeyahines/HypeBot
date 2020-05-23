@@ -19,6 +19,7 @@ log = "0.4.8"
 log4rs = "0.11.0"
 strfmt = "0.1.6"
 url = "2.1.1"
+white_rabbit = "0.1.1"
 
 [dependencies.serenity]
 version = "0.8.4"

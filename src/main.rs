@@ -20,26 +20,23 @@ use serenity::framework::standard::{CommandResult, StandardFramework};
 use serenity::model::channel::{Message, Reaction};
 use serenity::model::id::UserId;
 use serenity::model::prelude::Ready;
-use serenity::model::user::User;
-use serenity::prelude::TypeMapKey;
-use serenity::prelude::{Context, EventHandler, RwLock, ShareMap};
-use serenity::CacheAndHttp;
+use serenity::prelude::{Context, EventHandler, RwLock};
 use std::collections::HashSet;
 use std::process::exit;
 use std::sync::Arc;
-use std::thread;
-use std::thread::sleep;
-use std::time::Duration;
+use white_rabbit::{DateResult, Scheduler};
 
 mod database;
 mod discord;
 mod hypebot_config;
 
+use crate::discord::schedule_event;
 use database::models::NewEvent;
 use database::*;
 use discord::events::{CANCEL_COMMAND, CONFIRM_COMMAND, CREATE_COMMAND};
 use discord::{
-    get_config, log_error, permission_check, send_dm_message, send_message_to_reaction_users,
+    delete_event, get_config, get_scheduler, log_error, permission_check,
+    send_message_to_reaction_users, DraftEvent, SchedulerKey,
 };
 use hypebot_config::HypeBotConfig;
 
@@ -54,16 +51,6 @@ type HypeBotResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[description("Commands for Creating Events")]
 #[commands(create, confirm, cancel)]
 struct EventCommands;
-
-/// Struct for storing drafted events
-struct DraftEvent {
-    pub event: NewEvent,
-    pub creator_id: u64,
-}
-
-impl TypeMapKey for DraftEvent {
-    type Value = DraftEvent;
-}
 
 /// Handler for Discord events
 struct Handler;
@@ -110,54 +97,6 @@ fn bot_help(
     owners: HashSet<UserId>,
 ) -> CommandResult {
     help_commands::with_embeds(context, msg, args, help_options, groups, owners)
-}
-
-/// Thread to send reminders to users
-fn send_reminders(cache_and_http: &Arc<CacheAndHttp>, data: &Arc<RwLock<ShareMap>>) {
-    let sleep_duration = Duration::from_secs(60);
-    let config = get_config(data).unwrap();
-    loop {
-        sleep(sleep_duration);
-        let http = &cache_and_http.http;
-        let event_channel_id = config.event_channel;
-
-        // Get all current events
-        if let Ok(events) = get_all_events(config.db_url.clone()) {
-            for event in events {
-                if let Ok(message_id) = event.message_id.parse::<u64>() {
-                    // Get time to event
-                    let utc_time = DateTime::<Utc>::from_utc(event.event_time.clone(), Utc);
-                    let current_time = chrono::offset::Utc::now();
-                    let time_to_event = (utc_time - current_time).num_minutes();
-                    // If the event starts in less than 10 minutes
-                    if time_to_event <= 10 && time_to_event > 0 && event.reminder_sent < 1 {
-                        // Get message id
-                        if let Ok(message) = http.get_message(event_channel_id, message_id) {
-                            let reaction_users = message
-                                .reaction_users(&http, INTERESTED_EMOJI, None, None)
-                                .unwrap_or(Vec::<User>::new());
-
-                            // Build reminder message
-                            let msg: String = format!(
-                                "Hello! **{}** begins in **{} minutes**!",
-                                &event.event_name, time_to_event
-                            );
-
-                            // Send reminder to each reacted user
-                            for user in reaction_users {
-                                send_dm_message(&http, user, &msg);
-                            }
-                        }
-
-                        set_reminder(config.db_url.clone(), event.id, 1).ok();
-                    } else if time_to_event < -60 {
-                        remove_event(config.db_url.clone(), event.id).ok();
-                        http.delete_message(event_channel_id, message_id).ok();
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// Does the setup for logging
@@ -232,7 +171,7 @@ fn main() -> HypeBotResult<()> {
                 .help(&BOT_HELP),
         );
 
-        // Copy config data to client data
+        // Copy config data to client data and setup scheduler
         {
             let mut data = client.data.write();
             data.insert::<HypeBotConfig>(cfg);
@@ -249,10 +188,37 @@ fn main() -> HypeBotResult<()> {
                 },
                 creator_id: 0,
             });
+
+            // Create scheduler
+            let scheduler = Scheduler::new(4);
+            let scheduler = Arc::new(RwLock::new(scheduler));
+            data.insert::<SchedulerKey>(scheduler);
         }
-        let data = client.data.clone();
-        let cache_and_http = client.cache_and_http.clone();
-        thread::spawn(move || send_reminders(&cache_and_http, &data));
+
+        // schedule
+        let config = get_config(&client.data).expect("Unable to find get config");
+        let duration = chrono::Duration::minutes(60);
+        for event in get_all_events(config.db_url.clone()).unwrap() {
+            let event_time: DateTime<Utc> =
+                DateTime::<Utc>::from_utc(event.event_time.clone(), Utc);
+
+            if Utc::now() > event_time + duration {
+                delete_event(&client.cache_and_http.http, &client.data, &event);
+            } else if Utc::now() > event_time {
+                let scheduler = get_scheduler(&client.data).unwrap();
+                let mut scheduler = scheduler.write();
+                let cancel_time = event_time + duration;
+                let http = client.cache_and_http.http.clone();
+                let data = client.data.clone();
+
+                scheduler.add_task_datetime(cancel_time, move |_| {
+                    delete_event(&http, &data, &event);
+                    DateResult::Done
+                });
+            } else if event.reminder_sent == 0 {
+                schedule_event(&client.cache_and_http.http, &client.data, &event);
+            }
+        }
 
         // Start bot
         info!("Starting HypeBot!");
