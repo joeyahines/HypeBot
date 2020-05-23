@@ -37,6 +37,6 @@ event_channel = 0
 event_roles = [0]
 # Timezone to display events, supported timezones can be found at https://docs.rs/chrono-tz/0.5.1/chrono_tz/#modules
 event_timezone = "America/New_York"
-# Path to logger
-log_path = "hype_bot.log"
+# Path to place logs in
+log_path = "log/"
 ```

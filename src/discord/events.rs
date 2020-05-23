@@ -16,6 +16,8 @@ use url::Url;
 #[command]
 /// Posts a previewed event
 ///
+/// `~confirm`
+///
 /// **Note**
 /// You can only post events you have created. Only one preview event can exist at a time.
 fn confirm(ctx: &mut Context, msg: &Message, _args: Args) -> CommandResult {
@@ -162,8 +164,8 @@ fn create(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
 #[command]
 /// Cancels an already scheduled event
 ///
-/// `~create_event "event name"`
-fn cancel(ctx: &mut Context, _msg: &Message, mut args: Args) -> CommandResult {
+/// `~cancel "event name"`
+fn cancel(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
     let config = get_config(&ctx.data)?;
 
     // Parse args
@@ -186,6 +188,8 @@ fn cancel(ctx: &mut Context, _msg: &Message, mut args: Args) -> CommandResult {
     remove_event(config.db_url.clone(), event.id)?;
 
     message.delete(&ctx)?;
+
+    msg.reply(&ctx, "**{}** has been canceled")?;
 
     Ok(())
 }

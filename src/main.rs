@@ -10,9 +10,15 @@ extern crate log4rs;
 use chrono::{DateTime, Utc};
 use clap::{App, Arg};
 use log::LevelFilter;
-use log4rs::append::file::FileAppender;
+use log4rs::append::rolling_file::{RollingFileAppender};
 use log4rs::config::{Appender, Config, Root};
 use log4rs::encode::pattern::PatternEncoder;
+use log4rs::append::console::ConsoleAppender;
+use log4rs::append::rolling_file::policy::compound::roll::fixed_window::FixedWindowRoller;
+use log4rs::append::rolling_file::policy::compound::trigger::size::SizeTrigger;
+use log4rs::append::rolling_file::policy::compound::CompoundPolicy;
+use log4rs::filter::threshold::ThresholdFilter;
+use log4rs::init_config;
 use serenity::client::Client;
 use serenity::framework::standard::macros::{group, help};
 use serenity::framework::standard::{help_commands, Args, CommandGroup, HelpOptions};
@@ -25,18 +31,18 @@ use std::collections::HashSet;
 use std::process::exit;
 use std::sync::Arc;
 use white_rabbit::{DateResult, Scheduler};
+use std::path::Path;
 
 mod database;
 mod discord;
 mod hypebot_config;
 
-use crate::discord::schedule_event;
 use database::models::NewEvent;
 use database::*;
 use discord::events::{CANCEL_COMMAND, CONFIRM_COMMAND, CREATE_COMMAND};
 use discord::{
     delete_event, get_config, get_scheduler, log_error, permission_check,
-    send_message_to_reaction_users, DraftEvent, SchedulerKey,
+    send_message_to_reaction_users, schedule_event, DraftEvent, SchedulerKey,
 };
 use hypebot_config::HypeBotConfig;
 
@@ -80,7 +86,6 @@ impl EventHandler for Handler {
 
     /// On bot ready
     fn ready(&self, _: Context, ready: Ready) {
-        println!("Connected to Discord as {}", ready.user.name);
         info!("Connected to Discord as {}", ready.user.name);
     }
 }
@@ -101,18 +106,57 @@ fn bot_help(
 
 /// Does the setup for logging
 fn setup_logging(config: &HypeBotConfig) -> HypeBotResult<()> {
-    // Setup logging
-    let log_encode = Box::new(PatternEncoder::new("{d}:{l}-{m}\n"));
+    // Build log file path
+    let log_file_path = Path::new(&config.log_path);
+    let log_file_path = log_file_path.join("hype_bot.log");
 
-    let logfile = FileAppender::builder()
-        .encoder(log_encode)
-        .build(&config.log_path)?;
+    // Number of logs to keep
+    let window_size = 10;
 
-    let log_config = Config::builder()
-        .appender(Appender::builder().build("logfile", Box::new(logfile)))
-        .build(Root::builder().appender("logfile").build(LevelFilter::Info))?;
+    // 10MB file size limit
+    let size_limit = 1 * 1024 * 1024;
+    let size_trigger = SizeTrigger::new(size_limit);
 
-    log4rs::init_config(log_config)?;
+    let fixed_window_roller = FixedWindowRoller::builder()
+        .build("hype_bot.{}.log", window_size)
+        .unwrap();
+
+    let compound_policy =
+        CompoundPolicy::new(Box::new(size_trigger), Box::new(fixed_window_roller));
+
+    let config = Config::builder()
+        .appender(
+            Appender::builder()
+                .filter(Box::new(ThresholdFilter::new(LevelFilter::Info)))
+                .build(
+                    "logfile",
+                    Box::new(
+                        RollingFileAppender::builder()
+                            .encoder(Box::new(PatternEncoder::new("{d} {l}::{m}{n}")))
+                            .build(log_file_path, Box::new(compound_policy))?,
+                    ),
+                ),
+        )
+        .appender(
+            Appender::builder()
+                .filter(Box::new(ThresholdFilter::new(LevelFilter::Info)))
+                .build(
+                    "stdout",
+                    Box::new(
+                        ConsoleAppender::builder()
+                            .encoder(Box::new(PatternEncoder::new("{l}::{m}{n}")))
+                            .build(),
+                    ),
+                ),
+        )
+        .build(
+            Root::builder()
+                .appender("logfile")
+                .appender("stdout")
+                .build(LevelFilter::Info),
+        )?;
+
+    init_config(config)?;
 
     Ok(())
 }
@@ -195,7 +239,7 @@ fn main() -> HypeBotResult<()> {
             data.insert::<SchedulerKey>(scheduler);
         }
 
-        // schedule
+        // Schedule current events
         let config = get_config(&client.data).expect("Unable to find get config");
         let duration = chrono::Duration::minutes(60);
         for event in get_all_events(config.db_url.clone()).unwrap() {
@@ -222,9 +266,8 @@ fn main() -> HypeBotResult<()> {
 
         // Start bot
         info!("Starting HypeBot!");
-        println!("Starting HypeBot!");
         if let Err(why) = client.start() {
-            println!("An error occurred while running the client: {:?}", why);
+            error!("An error occurred while running the client: {:?}", why);
         }
     } else {
         // Print help
