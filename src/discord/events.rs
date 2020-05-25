@@ -179,17 +179,17 @@ fn cancel(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
         .reaction_users(&ctx.http, INTERESTED_EMOJI, None, None)
         .unwrap_or(Vec::<User>::new());
 
-    let string = format!("**{}** has been canceled!", event.event_name.clone());
+    let cancel_msg = format!("**{}** has been canceled!", event.event_name.clone());
 
     for user in reaction_users {
-        send_dm_message(&ctx.http, user, &string);
+        send_dm_message(&ctx.http, user, &cancel_msg);
     }
 
     remove_event(config.db_url.clone(), event.id)?;
 
     message.delete(&ctx)?;
 
-    msg.reply(&ctx, "**{}** has been canceled")?;
+    msg.reply(&ctx, &cancel_msg)?;
 
     Ok(())
 }
