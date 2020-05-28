@@ -64,7 +64,13 @@ struct Handler;
 impl EventHandler for Handler {
     /// On reaction add
     fn reaction_add(&self, ctx: Context, reaction: Reaction) {
-        let config = get_config(&ctx.data).unwrap();
+        let config = match get_config(&ctx.data) {
+            Ok(config) => config,
+            Err(e) => {
+                error!("Unable to get config: {}", e.0);
+                return;
+            }
+        };
         if reaction.channel_id.0 == config.event_channel && reaction.emoji.as_data() == INTERESTED_EMOJI {
             send_message_to_reaction_users(
                 &ctx,
@@ -76,7 +82,13 @@ impl EventHandler for Handler {
 
     /// On reaction remove
     fn reaction_remove(&self, ctx: Context, reaction: Reaction) {
-        let config = get_config(&ctx.data).unwrap();
+        let config = match get_config(&ctx.data) {
+            Ok(config) => config,
+            Err(e) => {
+                error!("Unable to get config: {}", e.0);
+                return;
+            }
+        };
         if reaction.channel_id.0 == config.event_channel && reaction.emoji.as_data() == INTERESTED_EMOJI {
             send_message_to_reaction_users(
                 &ctx,
@@ -111,16 +123,17 @@ fn setup_logging(config: &HypeBotConfig) -> HypeBotResult<()> {
     // Build log file path
     let log_file_path = Path::new(&config.log_path);
     let log_file_path = log_file_path.join("hype_bot.log");
+    let archive = log_file_path.join("hype_bot.{}.log");
 
     // Number of logs to keep
     let window_size = 10;
 
     // 10MB file size limit
-    let size_limit = 1 * 1024 * 1024;
+    let size_limit = 10 * 1024 * 1024;
     let size_trigger = SizeTrigger::new(size_limit);
 
     let fixed_window_roller = FixedWindowRoller::builder()
-        .build("hype_bot.{}.log", window_size)
+        .build(archive.to_str().unwrap(), window_size)
         .unwrap();
 
     let compound_policy =
@@ -236,7 +249,7 @@ fn main() -> HypeBotResult<()> {
             });
 
             // Create scheduler
-            let scheduler = Scheduler::new(4);
+            let scheduler = Scheduler::new(2);
             let scheduler = Arc::new(RwLock::new(scheduler));
             data.insert::<SchedulerKey>(scheduler);
         }

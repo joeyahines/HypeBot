@@ -22,5 +22,5 @@ url = "2.1.1"
 white_rabbit = "0.1.1"
 
 [dependencies.serenity]
-version = "0.8.4"
+version = "0.8.6"
 features = ["framework", "standard_framework"]
