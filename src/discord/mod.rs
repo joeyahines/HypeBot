@@ -74,6 +74,15 @@ pub fn send_dm_message(http: &Http, user: User, message: &String) {
     }
 }
 
+/// Create a countdown link for the event
+pub fn get_countdown_link(event_name: &String, utc: &DateTime<Utc>) -> String {
+    let msg = event_name.replace(" ", "+");
+    let time = utc.format("%G%m%dT%H%M").to_string();
+
+    format!("https://www.timeanddate.com/countdown/generic?iso={}&p0=&msg={}&font=sanserif&csz=1", time, msg)
+
+}
+
 /// Sends the event message to the event channel
 pub fn send_event_msg(
     http: &Http,
@@ -104,6 +113,7 @@ pub fn send_event_msg(
                 .timestamp(utc_time.to_rfc3339())
                 .field("Location", &event.event_loc, true)
                 .field("Organizer", &event.organizer, true)
+                .field("Countdown", get_countdown_link(&event.event_name, &utc_time), false)
         })
     })?;
 
